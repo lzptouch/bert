@@ -12,7 +12,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tokenization classes."""
+"""标记化相关类和函数。
+
+该模块实现了 BERT 模型使用的标记化功能，包括：
+1. 基本标记化（BasicTokenizer）：处理标点符号分割、大小写转换等
+2. WordPiece 标记化（WordpieceTokenizer）：将单词拆分为子词单元
+3. 全标记化流程（FullTokenizer）：结合基本标记化和 WordPiece 标记化
+4. 各种辅助函数：词汇表加载、ID 转换、字符串处理等
+
+主要功能：
+- 将原始文本转换为标记序列
+- 处理多语言文本，包括中文
+- 支持大小写转换
+- 处理特殊字符和控制字符
+"""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -26,7 +39,19 @@ import tensorflow as tf
 
 
 def validate_case_matches_checkpoint(do_lower_case, init_checkpoint):
-  """Checks whether the casing config is consistent with the checkpoint name."""
+  """检查大小写配置是否与检查点名称一致。
+
+  验证用户指定的 do_lower_case 标志是否与预训练模型的大小写设置匹配。
+  通过检查模型名称来推断其大小写设置。
+
+  参数：
+    do_lower_case: 是否使用小写
+    init_checkpoint: 初始检查点路径
+
+  异常：
+    ValueError: 如果大小写配置与检查点不一致
+  """
+
 
   # The casing has to be passed in by the user and there is no explicit check
   # as to whether it matches the checkpoint. The casing information probably
@@ -76,7 +101,21 @@ def validate_case_matches_checkpoint(do_lower_case, init_checkpoint):
 
 
 def convert_to_unicode(text):
-  """Converts `text` to Unicode (if it's not already), assuming utf-8 input."""
+  """将文本转换为 Unicode 格式（如果尚未是 Unicode）。
+
+  假设输入文本是 UTF-8 编码，将其转换为 Unicode 字符串。
+  支持 Python 2 和 Python 3。
+
+  参数：
+    text: 输入文本，可以是 str 或 bytes 类型
+
+  返回值：
+    Unicode 格式的文本
+
+  异常：
+    ValueError: 如果输入类型不受支持
+  """
+
   if six.PY3:
     if isinstance(text, str):
       return text
@@ -96,7 +135,20 @@ def convert_to_unicode(text):
 
 
 def printable_text(text):
-  """Returns text encoded in a way suitable for print or `tf.logging`."""
+  """返回适合打印或 `tf.logging` 的文本编码。
+
+  将文本转换为适合打印或日志记录的格式，支持 Python 2 和 Python 3。
+
+  参数：
+    text: 输入文本，可以是 str 或 bytes 类型
+
+  返回值：
+    适合打印的文本
+
+  异常：
+    ValueError: 如果输入类型不受支持
+  """
+
 
   # These functions want `str` for both Python2 and Python3, but in one case
   # it's a Unicode string and in the other it's a byte string.
@@ -119,7 +171,17 @@ def printable_text(text):
 
 
 def load_vocab(vocab_file):
-  """Loads a vocabulary file into a dictionary."""
+  """加载词汇表文件到字典中。
+
+  从指定的词汇表文件中加载词汇及其对应的索引，返回一个有序字典。
+
+  参数：
+    vocab_file: 词汇表文件路径
+
+  返回值：
+    有序字典，键为词汇，值为索引
+  """
+
   vocab = collections.OrderedDict()
   index = 0
   with tf.gfile.GFile(vocab_file, "r") as reader:
@@ -134,7 +196,18 @@ def load_vocab(vocab_file):
 
 
 def convert_by_vocab(vocab, items):
-  """Converts a sequence of [tokens|ids] using the vocab."""
+  """使用词汇表转换标记序列或 ID 序列。
+
+  根据提供的词汇表，将标记序列转换为 ID 序列，或反之。
+
+  参数：
+    vocab: 词汇表字典
+    items: 要转换的标记或 ID 序列
+
+  返回值：
+    转换后的序列
+  """
+
   output = []
   for item in items:
     output.append(vocab[item])
@@ -150,7 +223,17 @@ def convert_ids_to_tokens(inv_vocab, ids):
 
 
 def whitespace_tokenize(text):
-  """Runs basic whitespace cleaning and splitting on a piece of text."""
+  """对文本进行基本的空白字符清理和分割。
+
+  移除文本两端的空白字符，然后按空白字符分割文本。
+
+  参数：
+    text: 输入文本
+
+  返回值：
+    分割后的标记列表
+  """
+
   text = text.strip()
   if not text:
     return []
@@ -159,7 +242,22 @@ def whitespace_tokenize(text):
 
 
 class FullTokenizer(object):
-  """Runs end-to-end tokenziation."""
+  """运行端到端的标记化流程。
+
+  结合 BasicTokenizer 和 WordpieceTokenizer，执行完整的标记化过程。
+
+  属性：
+    vocab: 词汇表字典
+    inv_vocab: 反向词汇表字典（ID 到标记的映射）
+    basic_tokenizer: BasicTokenizer 实例
+    wordpiece_tokenizer: WordpieceTokenizer 实例
+
+  方法：
+    tokenize: 将文本转换为标记序列
+    convert_tokens_to_ids: 将标记序列转换为 ID 序列
+    convert_ids_to_tokens: 将 ID 序列转换为标记序列
+  """
+
 
   def __init__(self, vocab_file, do_lower_case=True):
     self.vocab = load_vocab(vocab_file)
@@ -183,18 +281,51 @@ class FullTokenizer(object):
 
 
 class BasicTokenizer(object):
-  """Runs basic tokenization (punctuation splitting, lower casing, etc.)."""
+  """运行基本标记化（标点符号分割、大小写转换等）。
+
+  执行基本的文本处理，包括清理文本、处理中文字符、分割标点符号、大小写转换等。
+
+  属性：
+    do_lower_case: 是否将文本转换为小写
+
+  方法：
+    tokenize: 将文本转换为标记序列
+    _run_strip_accents: 移除文本中的重音符号
+    _run_split_on_punc: 按标点符号分割文本
+    _tokenize_chinese_chars: 处理中文字符
+    _is_chinese_char: 检查字符是否为中文字符
+    _clean_text: 清理文本中的无效字符和空白字符
+  """
+
 
   def __init__(self, do_lower_case=True):
-    """Constructs a BasicTokenizer.
+    """构造 BasicTokenizer 实例。
 
-    Args:
-      do_lower_case: Whether to lower case the input.
+    参数：
+      do_lower_case: 是否将输入文本转换为小写
     """
+
     self.do_lower_case = do_lower_case
 
   def tokenize(self, text):
-    """Tokenizes a piece of text."""
+    """对文本进行标记化处理。
+
+    执行以下步骤：
+    1. 将文本转换为 Unicode 格式
+    2. 清理文本中的无效字符和空白字符
+    3. 处理中文字符（在中文字符周围添加空白）
+    4. 按空白字符分割文本
+    5. 如果需要，将文本转换为小写并移除重音符号
+    6. 按标点符号分割文本
+    7. 再次按空白字符分割文本
+
+    参数：
+      text: 输入文本
+
+    返回值：
+      标记化后的标记列表
+    """
+
     text = convert_to_unicode(text)
     text = self._clean_text(text)
 
@@ -218,7 +349,17 @@ class BasicTokenizer(object):
     return output_tokens
 
   def _run_strip_accents(self, text):
-    """Strips accents from a piece of text."""
+    """移除文本中的重音符号。
+
+    使用 Unicode 规范化将重音符号从文本中移除。
+
+    参数：
+      text: 输入文本
+
+    返回值：
+      移除重音符号后的文本
+    """
+
     text = unicodedata.normalize("NFD", text)
     output = []
     for char in text:
@@ -229,7 +370,17 @@ class BasicTokenizer(object):
     return "".join(output)
 
   def _run_split_on_punc(self, text):
-    """Splits punctuation on a piece of text."""
+    """按标点符号分割文本。
+
+    将文本中的标点符号分割成单独的标记。
+
+    参数：
+      text: 输入文本
+
+    返回值：
+      分割后的标记列表
+    """
+
     chars = list(text)
     i = 0
     start_new_word = True
@@ -249,7 +400,18 @@ class BasicTokenizer(object):
     return ["".join(x) for x in output]
 
   def _tokenize_chinese_chars(self, text):
-    """Adds whitespace around any CJK character."""
+    """在中文字符周围添加空白字符。
+
+    为了正确处理中文文本，在每个中文字符周围添加空白字符，
+    这样后续的标记化过程可以将每个中文字符视为一个单独的标记。
+
+    参数：
+      text: 输入文本
+
+    返回值：
+      处理后的文本
+    """
+
     output = []
     for char in text:
       cp = ord(char)
@@ -262,7 +424,18 @@ class BasicTokenizer(object):
     return "".join(output)
 
   def _is_chinese_char(self, cp):
-    """Checks whether CP is the codepoint of a CJK character."""
+    """检查字符是否为中文字符。
+
+    根据 Unicode 编码范围判断字符是否为中文字符。
+    包括 CJK 统一表意文字、扩展 A 到 F 等范围。
+
+    参数：
+      cp: 字符的 Unicode 编码
+
+    返回值：
+      如果是中文字符，返回 True，否则返回 False
+    """
+
     # This defines a "chinese character" as anything in the CJK Unicode block:
     #   https://en.wikipedia.org/wiki/CJK_Unified_Ideographs_(Unicode_block)
     #
@@ -284,7 +457,17 @@ class BasicTokenizer(object):
     return False
 
   def _clean_text(self, text):
-    """Performs invalid character removal and whitespace cleanup on text."""
+    """清理文本中的无效字符和空白字符。
+
+    移除文本中的无效字符（如控制字符），并将各种空白字符统一为空格。
+
+    参数：
+      text: 输入文本
+
+    返回值：
+      清理后的文本
+    """
+
     output = []
     for char in text:
       cp = ord(char)
@@ -298,30 +481,47 @@ class BasicTokenizer(object):
 
 
 class WordpieceTokenizer(object):
-  """Runs WordPiece tokenziation."""
+  """运行 WordPiece 标记化。
+
+  使用贪心最长匹配算法将单词拆分为子词单元。
+
+  属性：
+    vocab: 词汇表字典
+    unk_token: 未知标记
+    max_input_chars_per_word: 每个单词的最大字符数
+
+  方法：
+    tokenize: 将文本转换为 WordPiece 标记序列
+  """
 
   def __init__(self, vocab, unk_token="[UNK]", max_input_chars_per_word=200):
+    """构造 WordpieceTokenizer 实例。
+
+    参数：
+      vocab: 词汇表字典
+      unk_token: 未知标记
+      max_input_chars_per_word: 每个单词的最大字符数
+    """
     self.vocab = vocab
     self.unk_token = unk_token
     self.max_input_chars_per_word = max_input_chars_per_word
 
   def tokenize(self, text):
-    """Tokenizes a piece of text into its word pieces.
+    """将文本转换为 WordPiece 标记序列。
 
-    This uses a greedy longest-match-first algorithm to perform tokenization
-    using the given vocabulary.
+    使用贪心最长匹配算法，根据给定的词汇表进行标记化。
 
-    For example:
-      input = "unaffable"
-      output = ["un", "##aff", "##able"]
+    例如：
+      输入 = "unaffable"
+      输出 = ["un", "##aff", "##able"]
 
-    Args:
-      text: A single token or whitespace separated tokens. This should have
-        already been passed through `BasicTokenizer.
+    参数：
+      text: 单个标记或空白分隔的标记。应该已经通过 `BasicTokenizer` 处理。
 
-    Returns:
-      A list of wordpiece tokens.
+    返回值：
+      WordPiece 标记列表。
     """
+
 
     text = convert_to_unicode(text)
 
@@ -360,7 +560,17 @@ class WordpieceTokenizer(object):
 
 
 def _is_whitespace(char):
-  """Checks whether `chars` is a whitespace character."""
+  """检查字符是否为空白字符。
+
+  判断字符是否为空白字符，包括空格、制表符、换行符、回车符以及 Unicode 空格类别。
+
+  参数：
+    char: 输入字符
+
+  返回值：
+    如果是空白字符，返回 True，否则返回 False
+  """
+
   # \t, \n, and \r are technically contorl characters but we treat them
   # as whitespace since they are generally considered as such.
   if char == " " or char == "\t" or char == "\n" or char == "\r":
@@ -372,7 +582,17 @@ def _is_whitespace(char):
 
 
 def _is_control(char):
-  """Checks whether `chars` is a control character."""
+  """检查字符是否为控制字符。
+
+  判断字符是否为控制字符，但将制表符、换行符和回车符视为空白字符而非控制字符。
+
+  参数：
+    char: 输入字符
+
+  返回值：
+    如果是控制字符，返回 True，否则返回 False
+  """
+
   # These are technically control characters but we count them as whitespace
   # characters.
   if char == "\t" or char == "\n" or char == "\r":
@@ -384,7 +604,17 @@ def _is_control(char):
 
 
 def _is_punctuation(char):
-  """Checks whether `chars` is a punctuation character."""
+  """检查字符是否为标点符号。
+
+  判断字符是否为标点符号，包括 ASCII 标点符号和 Unicode 标点符号类别。
+
+  参数：
+    char: 输入字符
+
+  返回值：
+    如果是标点符号，返回 True，否则返回 False
+  """
+
   cp = ord(char)
   # We treat all non-letter/number ASCII as punctuation.
   # Characters such as "^", "$", and "`" are not in the Unicode

@@ -12,7 +12,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Run BERT on SQuAD 1.1 and SQuAD 2.0."""
+"""在 SQuAD 1.1 和 SQuAD 2.0 数据集上运行 BERT 模型进行问答任务。
+
+该模块实现了以下功能：
+1. 读取和处理 SQuAD 格式的问答数据
+2. 将文本数据转换为 BERT 模型的输入特征
+3. 构建问答模型，预测答案在文档中的起始和结束位置
+4. 生成最终预测结果并写入 JSON 文件
+5. 支持 SQuAD 2.0 的无答案情况
+
+主要组件：
+- SquadExample：存储单个训练/测试示例
+- InputFeatures：存储模型输入特征
+- FeatureWriter：将特征写入 TFRecord 文件
+- 各种工具函数：数据处理、模型构建、预测生成等
+"""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -155,9 +169,19 @@ flags.DEFINE_float(
 
 
 class SquadExample(object):
-  """A single training/test example for simple sequence classification.
+  """单个训练/测试示例，用于问答任务。
 
-     For examples without an answer, the start and end position are -1.
+  存储 SQuAD 数据集中的单个问答对，包含问题、文档上下文和答案信息。
+  对于没有答案的示例（SQuAD 2.0），起始和结束位置设置为 -1。
+
+  属性：
+    qas_id: 问题-答案对的唯一标识符
+    question_text: 问题文本
+    doc_tokens: 文档上下文的标记列表
+    orig_answer_text: 原始答案文本
+    start_position: 答案在文档中的起始位置
+    end_position: 答案在文档中的结束位置
+    is_impossible: 是否为无答案问题（仅 SQuAD 2.0）
   """
 
   def __init__(self,
@@ -195,7 +219,25 @@ class SquadExample(object):
 
 
 class InputFeatures(object):
-  """A single set of features of data."""
+  """单个数据样本的特征集合。
+
+  存储模型输入的特征，包括标记化后的文本、注意力掩码、段落ID等信息。
+  这些特征将被用于模型的训练和预测。
+
+  属性：
+    unique_id: 特征的唯一标识符
+    example_index: 对应的 SquadExample 索引
+    doc_span_index: 文档片段的索引（用于长文档的分块处理）
+    tokens: 标记化后的文本标记列表
+    token_to_orig_map: 标记到原始文本位置的映射
+    token_is_max_context: 标记是否在最大上下文中
+    input_ids: 输入标记的ID列表
+    input_mask: 输入掩码（1表示真实标记，0表示填充标记）
+    segment_ids: 段落ID（0表示问题，1表示文档）
+    start_position: 答案起始位置（训练时使用）
+    end_position: 答案结束位置（训练时使用）
+    is_impossible: 是否为无答案问题（训练时使用）
+  """
 
   def __init__(self,
                unique_id,
@@ -225,7 +267,19 @@ class InputFeatures(object):
 
 
 def read_squad_examples(input_file, is_training):
-  """Read a SQuAD json file into a list of SquadExample."""
+  """读取 SQuAD JSON 文件并转换为 SquadExample 列表。
+
+  解析 SQuAD 格式的 JSON 文件，提取问题、文档上下文和答案信息，
+  并将其转换为 SquadExample 对象列表。
+
+  参数：
+    input_file: SQuAD JSON 文件路径
+    is_training: 是否为训练模式（训练模式下会加载答案信息）
+
+  返回值：
+    包含 SquadExample 对象的列表
+  """
+
   with tf.gfile.Open(input_file, "r") as reader:
     input_data = json.load(reader)["data"]
 
@@ -309,7 +363,28 @@ def read_squad_examples(input_file, is_training):
 def convert_examples_to_features(examples, tokenizer, max_seq_length,
                                  doc_stride, max_query_length, is_training,
                                  output_fn):
-  """Loads a data file into a list of `InputBatch`s."""
+  """将 SquadExample 转换为模型输入特征。
+
+  处理 SquadExample 对象，进行标记化、长文档分块、特征提取等操作，
+  并通过 output_fn 将生成的 InputFeatures 对象输出。
+
+  参数：
+    examples: SquadExample 对象列表
+    tokenizer: 标记器，用于将文本转换为标记
+    max_seq_length: 最大序列长度
+    doc_stride: 文档分块的步长
+    max_query_length: 问题的最大长度
+    is_training: 是否为训练模式
+    output_fn: 处理生成的 InputFeatures 的回调函数
+
+  处理流程：
+    1. 对问题进行标记化并截断
+    2. 对文档进行标记化，处理 WordPiece 标记
+    3. 计算答案在标记序列中的位置
+    4. 对长文档进行分块处理
+    5. 为每个文档块生成 InputFeatures
+  """
+
 
   unique_id = 1000000000
 
@@ -475,7 +550,22 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
 def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer,
                          orig_answer_text):
-  """Returns tokenized answer spans that better match the annotated answer."""
+  """优化答案跨度，使其更好地匹配标注的答案。
+
+  SQuAD 标注是基于字符的，而模型使用的是 WordPiece 标记。
+  此函数尝试找到一个更好的标记跨度，使其与原始答案文本更匹配。
+
+  参数：
+    doc_tokens: 文档的标记列表
+    input_start: 输入的答案起始位置
+    input_end: 输入的答案结束位置
+    tokenizer: 标记器
+    orig_answer_text: 原始答案文本
+
+  返回值：
+    优化后的 (start, end) 标记位置元组
+  """
+
 
   # The SQuAD annotations are character based. We first project them to
   # whitespace-tokenized words. But then after WordPiece tokenization, we can
@@ -511,7 +601,20 @@ def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer,
 
 
 def _check_is_max_context(doc_spans, cur_span_index, position):
-  """Check if this is the 'max context' doc span for the token."""
+  """检查当前文档片段是否包含标记的最大上下文。
+
+  由于使用滑动窗口处理长文档，一个标记可能出现在多个文档片段中。
+  此函数确定哪个文档片段包含该标记的最大上下文。
+
+  参数：
+    doc_spans: 文档片段列表
+    cur_span_index: 当前文档片段的索引
+    position: 标记在原始文档中的位置
+
+  返回值：
+    如果当前文档片段包含最大上下文，则返回 True，否则返回 False
+  """
+
 
   # Because of the sliding window approach taken to scoring documents, a single
   # token can appear in multiple documents. E.g.
@@ -549,7 +652,22 @@ def _check_is_max_context(doc_spans, cur_span_index, position):
 
 def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
                  use_one_hot_embeddings):
-  """Creates a classification model."""
+  """创建问答模型。
+
+  构建基于 BERT 的问答模型，预测答案在文档中的起始和结束位置。
+
+  参数：
+    bert_config: BERT 模型配置
+    is_training: 是否为训练模式
+    input_ids: 输入标记的 ID
+    input_mask: 输入掩码
+    segment_ids: 段落 ID
+    use_one_hot_embeddings: 是否使用 one-hot 嵌入
+
+  返回值：
+    (start_logits, end_logits) 元组，分别表示答案起始和结束位置的 logits
+  """
+
   model = modeling.BertModel(
       config=bert_config,
       is_training=is_training,
@@ -590,7 +708,23 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
 def model_fn_builder(bert_config, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
                      use_one_hot_embeddings):
-  """Returns `model_fn` closure for TPUEstimator."""
+  """构建 TPUEstimator 使用的 model_fn 闭包。
+
+  创建一个 model_fn 函数，用于 TPUEstimator，处理模型的训练和预测逻辑。
+
+  参数：
+    bert_config: BERT 模型配置
+    init_checkpoint: 初始检查点路径
+    learning_rate: 学习率
+    num_train_steps: 训练步数
+    num_warmup_steps: 学习率预热步数
+    use_tpu: 是否使用 TPU
+    use_one_hot_embeddings: 是否使用 one-hot 嵌入
+
+  返回值：
+    用于 TPUEstimator 的 model_fn 函数
+  """
+
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
     """The `model_fn` for TPUEstimator."""
@@ -685,7 +819,20 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
 
 def input_fn_builder(input_file, seq_length, is_training, drop_remainder):
-  """Creates an `input_fn` closure to be passed to TPUEstimator."""
+  """构建 TPUEstimator 使用的 input_fn 闭包。
+
+  创建一个 input_fn 函数，用于 TPUEstimator，处理数据的读取和批处理。
+
+  参数：
+    input_file: TFRecord 文件路径
+    seq_length: 序列长度
+    is_training: 是否为训练模式
+    drop_remainder: 是否丢弃最后一个不完整的批次
+
+  返回值：
+    用于 TPUEstimator 的 input_fn 函数
+  """
+
 
   name_to_features = {
       "unique_ids": tf.FixedLenFeature([], tf.int64),
@@ -741,7 +888,30 @@ RawResult = collections.namedtuple("RawResult",
 def write_predictions(all_examples, all_features, all_results, n_best_size,
                       max_answer_length, do_lower_case, output_prediction_file,
                       output_nbest_file, output_null_log_odds_file):
-  """Write final predictions to the json file and log-odds of null if needed."""
+  """将最终预测结果写入 JSON 文件。
+
+  处理模型预测结果，生成最终答案，并写入到指定的输出文件中。
+  支持生成最佳预测和 n-best 预测列表。
+
+  参数：
+    all_examples: 所有 SquadExample 对象
+    all_features: 所有 InputFeatures 对象
+    all_results: 所有模型预测结果
+    n_best_size: n-best 预测的数量
+    max_answer_length: 答案的最大长度
+    do_lower_case: 是否使用小写
+    output_prediction_file: 预测结果输出文件路径
+    output_nbest_file: n-best 预测输出文件路径
+    output_null_log_odds_file: 无答案对数几率输出文件路径（仅 SQuAD 2.0）
+
+  处理流程：
+    1. 将特征和结果按示例索引分组
+    2. 为每个示例生成初步预测
+    3. 排序预测结果并生成 n-best 列表
+    4. 处理无答案情况（SQuAD 2.0）
+    5. 写入预测结果到 JSON 文件
+  """
+
   tf.logging.info("Writing predictions to: %s" % (output_prediction_file))
   tf.logging.info("Writing nbest to: %s" % (output_nbest_file))
 
@@ -925,7 +1095,19 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
 
 
 def get_final_text(pred_text, orig_text, do_lower_case):
-  """Project the tokenized prediction back to the original text."""
+  """将标记化的预测结果映射回原始文本。
+
+  将模型预测的标记序列转换回原始文本格式，处理大小写、标点等问题。
+
+  参数：
+    pred_text: 预测的标记化文本
+    orig_text: 原始文本
+    do_lower_case: 是否使用小写
+
+  返回值：
+    处理后的最终文本
+  """
+
 
   # When we created the data, we kept track of the alignment between original
   # (whitespace tokenized) tokens and our WordPiece tokenized tokens. So
@@ -1021,7 +1203,18 @@ def get_final_text(pred_text, orig_text, do_lower_case):
 
 
 def _get_best_indexes(logits, n_best_size):
-  """Get the n-best logits from a list."""
+  """从 logits 列表中获取 n-best 索引。
+
+  对 logits 进行排序，返回得分最高的 n_best_size 个索引。
+
+  参数：
+    logits: logits 列表
+    n_best_size: 要返回的最佳索引数量
+
+  返回值：
+    得分最高的 n_best_size 个索引列表
+  """
+
   index_and_score = sorted(enumerate(logits), key=lambda x: x[1], reverse=True)
 
   best_indexes = []
@@ -1033,7 +1226,17 @@ def _get_best_indexes(logits, n_best_size):
 
 
 def _compute_softmax(scores):
-  """Compute softmax probability over raw logits."""
+  """计算原始 logits 的 softmax 概率。
+
+  对输入的得分列表计算 softmax 概率分布。
+
+  参数：
+    scores: 得分列表
+
+  返回值：
+    softmax 概率列表
+  """
+
   if not scores:
     return []
 
@@ -1056,7 +1259,21 @@ def _compute_softmax(scores):
 
 
 class FeatureWriter(object):
-  """Writes InputFeature to TF example file."""
+  """将 InputFeature 写入 TFRecord 文件。
+
+  负责将 InputFeature 对象转换为 TensorFlow Example 并写入 TFRecord 文件。
+
+  属性：
+    filename: 输出文件路径
+    is_training: 是否为训练模式
+    num_features: 已写入的特征数量
+    _writer: TFRecordWriter 对象
+
+  方法：
+    process_feature: 处理单个 InputFeature 并写入文件
+    close: 关闭文件写入器
+  """
+
 
   def __init__(self, filename, is_training):
     self.filename = filename
@@ -1095,7 +1312,17 @@ class FeatureWriter(object):
 
 
 def validate_flags_or_throw(bert_config):
-  """Validate the input FLAGS or throw an exception."""
+  """验证输入的 FLAGS 参数，如无效则抛出异常。
+
+  检查各种配置参数的有效性，确保模型能够正常运行。
+
+  参数：
+    bert_config: BERT 模型配置
+
+  异常：
+    ValueError: 如果配置参数无效
+  """
+
   tokenization.validate_case_matches_checkpoint(FLAGS.do_lower_case,
                                                 FLAGS.init_checkpoint)
 

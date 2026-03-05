@@ -12,7 +12,27 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Extract pre-computed feature vectors from BERT."""
+"""从 BERT 提取预计算的特征向量
+
+此脚本用于从预训练的 BERT 模型中提取特征向量，可用于下游任务。主要功能包括：
+
+1. 从输入文件中读取文本示例
+2. 将文本转换为 BERT 模型所需的特征格式
+3. 加载预训练的 BERT 模型
+4. 提取指定层的特征向量
+5. 将特征向量写入输出文件
+
+使用方法：
+  python extract_features.py \
+    --input_file=input.txt \
+    --output_file=output.json \
+    --vocab_file=vocab.txt \
+    --bert_config_file=bert_config.json \
+    --init_checkpoint=bert_model.ckpt \
+    --max_seq_length=128 \
+    --layers=-1,-2,-3,-4
+"""
+
 
 from __future__ import absolute_import
 from __future__ import division
@@ -79,17 +99,41 @@ flags.DEFINE_bool(
 
 
 class InputExample(object):
+  """输入示例类
+
+  表示 BERT 模型的输入示例，包含唯一 ID 和文本对。
+  """
 
   def __init__(self, unique_id, text_a, text_b):
+    """初始化输入示例
+
+    参数：
+        unique_id: 示例的唯一标识符
+        text_a: 第一个文本序列
+        text_b: 第二个文本序列（可选）
+    """
     self.unique_id = unique_id
     self.text_a = text_a
     self.text_b = text_b
 
 
+
 class InputFeatures(object):
-  """A single set of features of data."""
+  """单个数据特征集
+
+  表示 BERT 模型的输入特征，包含标记化后的 tokens、输入 IDs、掩码和类型 IDs。
+  """
 
   def __init__(self, unique_id, tokens, input_ids, input_mask, input_type_ids):
+    """初始化输入特征
+
+    参数：
+        unique_id: 示例的唯一标识符
+        tokens: 标记化后的 tokens 列表
+        input_ids: 转换为 IDs 的 tokens
+        input_mask: 输入掩码，1 表示真实 token，0 表示填充
+        input_type_ids: 输入类型 IDs，0 表示句子 A，1 表示句子 B
+    """
     self.unique_id = unique_id
     self.tokens = tokens
     self.input_ids = input_ids
@@ -97,8 +141,20 @@ class InputFeatures(object):
     self.input_type_ids = input_type_ids
 
 
+
 def input_fn_builder(features, seq_length):
-  """Creates an `input_fn` closure to be passed to TPUEstimator."""
+  """创建一个 `input_fn` 闭包，用于传递给 TPUEstimator
+
+  构建输入函数，将特征转换为 TensorFlow 数据集。
+
+  参数：
+      features: InputFeatures 对象列表
+      seq_length: 序列长度
+
+  返回：
+      用于 TPUEstimator 的 input_fn 函数
+  """
+
 
   all_unique_ids = []
   all_input_ids = []
@@ -112,7 +168,17 @@ def input_fn_builder(features, seq_length):
     all_input_type_ids.append(feature.input_type_ids)
 
   def input_fn(params):
-    """The actual input function."""
+    """实际的输入函数
+
+    构建 TensorFlow 数据集并返回批次数据。
+
+    参数：
+        params: 包含批次大小等参数的字典
+
+    返回：
+        TensorFlow 数据集
+    """
+
     batch_size = params["batch_size"]
 
     num_examples = len(features)
@@ -147,10 +213,37 @@ def input_fn_builder(features, seq_length):
 
 def model_fn_builder(bert_config, init_checkpoint, layer_indexes, use_tpu,
                      use_one_hot_embeddings):
-  """Returns `model_fn` closure for TPUEstimator."""
+  """返回 `model_fn` 闭包，用于 TPUEstimator
+
+  构建模型函数，加载预训练模型并提取特征。
+
+  参数：
+      bert_config: BERT 模型配置
+      init_checkpoint: 初始化检查点路径
+      layer_indexes: 要提取特征的层索引列表
+      use_tpu: 是否使用 TPU
+      use_one_hot_embeddings: 是否使用 one-hot 嵌入
+
+  返回：
+      用于 TPUEstimator 的 model_fn 函数
+  """
+
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
-    """The `model_fn` for TPUEstimator."""
+    """TPUEstimator 的 `model_fn` 函数
+
+    构建 BERT 模型，加载预训练权重，并提取指定层的特征。
+
+    参数：
+        features: 输入特征字典
+        labels: 标签（未使用）
+        mode: 模型模式
+        params: 模型参数（未使用）
+
+    返回：
+        TPUEstimatorSpec 对象
+    """
+
 
     unique_ids = features["unique_ids"]
     input_ids = features["input_ids"]
@@ -208,7 +301,19 @@ def model_fn_builder(bert_config, init_checkpoint, layer_indexes, use_tpu,
 
 
 def convert_examples_to_features(examples, seq_length, tokenizer):
-  """Loads a data file into a list of `InputBatch`s."""
+  """将输入示例转换为特征
+
+  将 InputExample 对象转换为 InputFeatures 对象，包括标记化、截断和填充。
+
+  参数：
+      examples: InputExample 对象列表
+      seq_length: 序列长度
+      tokenizer: 分词器实例
+
+  返回：
+      InputFeatures 对象列表
+  """
+
 
   features = []
   for (ex_index, example) in enumerate(examples):
@@ -300,7 +405,16 @@ def convert_examples_to_features(examples, seq_length, tokenizer):
 
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_length):
-  """Truncates a sequence pair in place to the maximum length."""
+  """将序列对截断到最大长度
+
+  当句子对的总长度超过最大长度时，从较长的句子中截断 tokens。
+
+  参数：
+      tokens_a: 第一个句子的 tokens 列表
+      tokens_b: 第二个句子的 tokens 列表
+      max_length: 最大长度
+  """
+
 
   # This is a simple heuristic which will always truncate the longer sequence
   # one token at a time. This makes more sense than truncating an equal percent
@@ -317,7 +431,20 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
 
 
 def read_examples(input_file):
-  """Read a list of `InputExample`s from an input file."""
+  """从输入文件读取 `InputExample` 列表
+
+  从输入文件中读取文本行，解析为 InputExample 对象。
+  支持两种格式：
+  1. 单行文本（text_a）
+  2. 用 "|||" 分隔的文本对（text_a ||| text_b）
+
+  参数：
+      input_file: 输入文件路径
+
+  返回：
+      InputExample 对象列表
+  """
+
   examples = []
   unique_id = 0
   with tf.gfile.GFile(input_file, "r") as reader:
@@ -341,15 +468,23 @@ def read_examples(input_file):
 
 
 def main(_):
+  """脚本主函数
+
+  解析命令行参数，初始化模型和分词器，读取输入文件，提取特征并写入输出文件。
+  """
   tf.logging.set_verbosity(tf.logging.INFO)
 
+  # 解析要提取的层索引
   layer_indexes = [int(x) for x in FLAGS.layers.split(",")]
 
+  # 加载 BERT 模型配置
   bert_config = modeling.BertConfig.from_json_file(FLAGS.bert_config_file)
 
+  # 初始化分词器
   tokenizer = tokenization.FullTokenizer(
       vocab_file=FLAGS.vocab_file, do_lower_case=FLAGS.do_lower_case)
 
+  # 配置 TPU 运行环境
   is_per_host = tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2
   run_config = tf.contrib.tpu.RunConfig(
       master=FLAGS.master,
@@ -357,15 +492,19 @@ def main(_):
           num_shards=FLAGS.num_tpu_cores,
           per_host_input_for_training=is_per_host))
 
+  # 读取输入示例
   examples = read_examples(FLAGS.input_file)
 
+  # 将示例转换为特征
   features = convert_examples_to_features(
       examples=examples, seq_length=FLAGS.max_seq_length, tokenizer=tokenizer)
 
+  # 创建唯一 ID 到特征的映射
   unique_id_to_feature = {}
   for feature in features:
     unique_id_to_feature[feature.unique_id] = feature
 
+  # 构建模型函数
   model_fn = model_fn_builder(
       bert_config=bert_config,
       init_checkpoint=FLAGS.init_checkpoint,
@@ -373,17 +512,18 @@ def main(_):
       use_tpu=FLAGS.use_tpu,
       use_one_hot_embeddings=FLAGS.use_one_hot_embeddings)
 
-  # If TPU is not available, this will fall back to normal Estimator on CPU
-  # or GPU.
+  # 初始化 TPUEstimator（如果 TPU 不可用，会回退到 CPU 或 GPU）
   estimator = tf.contrib.tpu.TPUEstimator(
       use_tpu=FLAGS.use_tpu,
       model_fn=model_fn,
       config=run_config,
       predict_batch_size=FLAGS.batch_size)
 
+  # 构建输入函数
   input_fn = input_fn_builder(
       features=features, seq_length=FLAGS.max_seq_length)
 
+  # 提取特征并写入输出文件
   with codecs.getwriter("utf-8")(tf.gfile.Open(FLAGS.output_file,
                                                "w")) as writer:
     for result in estimator.predict(input_fn, yield_single_examples=True):
@@ -408,6 +548,7 @@ def main(_):
         all_features.append(features)
       output_json["features"] = all_features
       writer.write(json.dumps(output_json) + "\n")
+
 
 
 if __name__ == "__main__":

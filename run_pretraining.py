@@ -12,7 +12,34 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Run masked LM/next sentence masked_lm pre-training for BERT."""
+"""BERT 预训练运行器
+
+该模块用于运行 BERT 模型的预训练过程，包括掩码语言模型（Masked LM）和下一句预测（Next Sentence Prediction）任务。
+
+主要功能：
+- 构建预训练模型
+- 计算掩码语言模型损失
+- 计算下一句预测损失
+- 训练和评估模型
+
+使用示例：
+```bash
+python run_pretraining.py \
+  --input_file=./data/tf_examples.tfrecord \
+  --output_dir=./output \
+  --do_train=True \
+  --do_eval=True \
+  --bert_config_file=./bert_config.json \
+  --init_checkpoint=./bert_model.ckpt \
+  --train_batch_size=32 \
+  --max_seq_length=128 \
+  --max_predictions_per_seq=20 \
+  --num_train_steps=100000 \
+  --num_warmup_steps=10000 \
+  --learning_rate=5e-5
+```
+"""
+
 
 from __future__ import absolute_import
 from __future__ import division
@@ -109,12 +136,12 @@ flags.DEFINE_integer(
 def model_fn_builder(bert_config, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
                      use_one_hot_embeddings):
-  """Returns `model_fn` closure for TPUEstimator."""
+  """返回用于 TPUEstimator 的 `model_fn` 闭包"""
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
-    """The `model_fn` for TPUEstimator."""
+    """TPUEstimator 的 `model_fn`"""
 
-    tf.logging.info("*** Features ***")
+    tf.logging.info("*** 特征 ***")
     for name in sorted(features.keys()):
       tf.logging.info("  name = %s, shape = %s" % (name, features[name].shape))
 
@@ -164,7 +191,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
       else:
         tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
-    tf.logging.info("**** Trainable Variables ****")
+    tf.logging.info("**** 可训练变量 ****")
     for var in tvars:
       init_string = ""
       if var.name in initialized_variable_names:
@@ -187,7 +214,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
       def metric_fn(masked_lm_example_loss, masked_lm_log_probs, masked_lm_ids,
                     masked_lm_weights, next_sentence_example_loss,
                     next_sentence_log_probs, next_sentence_labels):
-        """Computes the loss and accuracy of the model."""
+        """计算模型的损失和准确率"""
         masked_lm_log_probs = tf.reshape(masked_lm_log_probs,
                                          [-1, masked_lm_log_probs.shape[-1]])
         masked_lm_predictions = tf.argmax(
@@ -230,21 +257,22 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
           eval_metrics=eval_metrics,
           scaffold_fn=scaffold_fn)
     else:
-      raise ValueError("Only TRAIN and EVAL modes are supported: %s" % (mode))
+      raise ValueError("只支持 TRAIN 和 EVAL 模式: %s" % (mode))
 
     return output_spec
 
   return model_fn
 
 
+
 def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
                          label_ids, label_weights):
-  """Get loss and log probs for the masked LM."""
+  """获取掩码语言模型的损失和对数概率"""
   input_tensor = gather_indexes(input_tensor, positions)
 
   with tf.variable_scope("cls/predictions"):
-    # We apply one more non-linear transformation before the output layer.
-    # This matrix is not used after pre-training.
+    # 在输出层之前应用一个额外的非线性变换
+    # 这个矩阵在预训练后不再使用
     with tf.variable_scope("transform"):
       input_tensor = tf.layers.dense(
           input_tensor,
@@ -254,8 +282,7 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
               bert_config.initializer_range))
       input_tensor = modeling.layer_norm(input_tensor)
 
-    # The output weights are the same as the input embeddings, but there is
-    # an output-only bias for each token.
+    # 输出权重与输入嵌入相同，但每个标记有一个仅输出的偏置
     output_bias = tf.get_variable(
         "output_bias",
         shape=[bert_config.vocab_size],
@@ -270,10 +297,8 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     one_hot_labels = tf.one_hot(
         label_ids, depth=bert_config.vocab_size, dtype=tf.float32)
 
-    # The `positions` tensor might be zero-padded (if the sequence is too
-    # short to have the maximum number of predictions). The `label_weights`
-    # tensor has a value of 1.0 for every real prediction and 0.0 for the
-    # padding predictions.
+    # `positions` 张量可能是零填充的（如果序列太短，无法有最大数量的预测）
+    # `label_weights` 张量对每个真实预测的值为 1.0，对填充预测的值为 0.0
     per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1])
     numerator = tf.reduce_sum(label_weights * per_example_loss)
     denominator = tf.reduce_sum(label_weights) + 1e-5
@@ -282,11 +307,12 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
   return (loss, per_example_loss, log_probs)
 
 
-def get_next_sentence_output(bert_config, input_tensor, labels):
-  """Get loss and log probs for the next sentence prediction."""
 
-  # Simple binary classification. Note that 0 is "next sentence" and 1 is
-  # "random sentence". This weight matrix is not used after pre-training.
+def get_next_sentence_output(bert_config, input_tensor, labels):
+  """获取下一句预测的损失和对数概率"""
+
+  # 简单的二分类。注意 0 表示 "下一句"，1 表示 "随机句子"
+  # 这个权重矩阵在预训练后不再使用
   with tf.variable_scope("cls/seq_relationship"):
     output_weights = tf.get_variable(
         "output_weights",
@@ -305,20 +331,26 @@ def get_next_sentence_output(bert_config, input_tensor, labels):
     return (loss, per_example_loss, log_probs)
 
 
+
 def gather_indexes(sequence_tensor, positions):
-  """Gathers the vectors at the specific positions over a minibatch."""
+  """在小批量上收集特定位置的向量"""
   sequence_shape = modeling.get_shape_list(sequence_tensor, expected_rank=3)
   batch_size = sequence_shape[0]
   seq_length = sequence_shape[1]
   width = sequence_shape[2]
 
+  # 计算每个批次的偏移量
   flat_offsets = tf.reshape(
       tf.range(0, batch_size, dtype=tf.int32) * seq_length, [-1, 1])
+  # 计算扁平化的位置索引
   flat_positions = tf.reshape(positions + flat_offsets, [-1])
+  # 将序列张量扁平化
   flat_sequence_tensor = tf.reshape(sequence_tensor,
                                     [batch_size * seq_length, width])
+  # 收集指定位置的向量
   output_tensor = tf.gather(flat_sequence_tensor, flat_positions)
   return output_tensor
+
 
 
 def input_fn_builder(input_files,
@@ -326,10 +358,10 @@ def input_fn_builder(input_files,
                      max_predictions_per_seq,
                      is_training,
                      num_cpu_threads=4):
-  """Creates an `input_fn` closure to be passed to TPUEstimator."""
+  """创建一个 `input_fn` 闭包，用于传递给 TPUEstimator"""
 
   def input_fn(params):
-    """The actual input function."""
+    """实际的输入函数"""
     batch_size = params["batch_size"]
 
     name_to_features = {
@@ -349,18 +381,17 @@ def input_fn_builder(input_files,
             tf.FixedLenFeature([1], tf.int64),
     }
 
-    # For training, we want a lot of parallel reading and shuffling.
-    # For eval, we want no shuffling and parallel reading doesn't matter.
+    # 对于训练，我们需要大量的并行读取和随机打乱
+    # 对于评估，我们不需要打乱，并行读取也不重要
     if is_training:
       d = tf.data.Dataset.from_tensor_slices(tf.constant(input_files))
       d = d.repeat()
       d = d.shuffle(buffer_size=len(input_files))
 
-      # `cycle_length` is the number of parallel files that get read.
+      # `cycle_length` 是并行读取的文件数量
       cycle_length = min(num_cpu_threads, len(input_files))
 
-      # `sloppy` mode means that the interleaving is not exact. This adds
-      # even more randomness to the training pipeline.
+      # `sloppy` 模式意味着交错不是精确的。这为训练管道添加了更多的随机性
       d = d.apply(
           tf.contrib.data.parallel_interleave(
               tf.data.TFRecordDataset,
@@ -369,14 +400,12 @@ def input_fn_builder(input_files,
       d = d.shuffle(buffer_size=100)
     else:
       d = tf.data.TFRecordDataset(input_files)
-      # Since we evaluate for a fixed number of steps we don't want to encounter
-      # out-of-range exceptions.
+      # 由于我们评估固定数量的步骤，我们不希望遇到越界异常
       d = d.repeat()
 
-    # We must `drop_remainder` on training because the TPU requires fixed
-    # size dimensions. For eval, we assume we are evaluating on the CPU or GPU
-    # and we *don't* want to drop the remainder, otherwise we wont cover
-    # every sample.
+    # 我们必须在训练时 `drop_remainder`，因为 TPU 需要固定大小的维度
+    # 对于评估，我们假设我们在 CPU 或 GPU 上进行评估，我们 *不* 希望丢弃剩余部分，
+    # 否则我们将无法覆盖每个样本
     d = d.apply(
         tf.contrib.data.map_and_batch(
             lambda record: _decode_record(record, name_to_features),
@@ -388,12 +417,13 @@ def input_fn_builder(input_files,
   return input_fn
 
 
+
 def _decode_record(record, name_to_features):
-  """Decodes a record to a TensorFlow example."""
+  """将记录解码为 TensorFlow 示例"""
   example = tf.parse_single_example(record, name_to_features)
 
-  # tf.Example only supports tf.int64, but the TPU only supports tf.int32.
-  # So cast all int64 to int32.
+  # tf.Example 只支持 tf.int64，但 TPU 只支持 tf.int32
+  # 因此将所有 int64 转换为 int32
   for name in list(example.keys()):
     t = example[name]
     if t.dtype == tf.int64:
@@ -401,6 +431,7 @@ def _decode_record(record, name_to_features):
     example[name] = t
 
   return example
+
 
 
 def main(_):

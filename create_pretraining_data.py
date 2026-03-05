@@ -12,7 +12,28 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Create masked LM/next sentence masked_lm TF examples for BERT."""
+"""为 BERT 创建掩码语言模型（masked LM）和下一句预测（next sentence prediction）的 TF 示例
+
+此脚本用于将原始文本转换为 BERT 预训练所需的 TFRecord 格式数据。主要功能包括：
+
+1. 从原始文本文件中读取数据并分割为文档和句子
+2. 为每个训练实例创建句子对（A 和 B）
+3. 实现下一句预测任务的数据构建（50% 概率为实际下一句，50% 概率为随机句子）
+4. 实现掩码语言模型任务的数据构建（随机掩码 15% 的 tokens）
+5. 将训练实例转换为 TFExample 并写入输出文件
+
+使用方法：
+  python create_pretraining_data.py \
+    --input_file=input.txt \
+    --output_file=output.tfrecord \
+    --vocab_file=vocab.txt \
+    --do_lower_case=True \
+    --max_seq_length=128 \
+    --max_predictions_per_seq=20 \
+    --masked_lm_prob=0.15 \
+    --dupe_factor=10
+"""
+
 
 from __future__ import absolute_import
 from __future__ import division
@@ -66,10 +87,22 @@ flags.DEFINE_float(
 
 
 class TrainingInstance(object):
-  """A single training instance (sentence pair)."""
+  """单个训练实例（句子对）
+
+  表示 BERT 预训练中的一个训练实例，包含句子对、掩码位置和标签等信息。
+  """
 
   def __init__(self, tokens, segment_ids, masked_lm_positions, masked_lm_labels,
                is_random_next):
+    """初始化训练实例
+
+    参数：
+        tokens: 标记化后的 tokens 列表，包含 [CLS] 和 [SEP] 标记
+        segment_ids: 段落 ID 列表，0 表示句子 A，1 表示句子 B
+        masked_lm_positions: 被掩码的 token 位置列表
+        masked_lm_labels: 被掩码的 token 原始值列表
+        is_random_next: 是否为随机下一句（用于下一句预测任务）
+    """
     self.tokens = tokens
     self.segment_ids = segment_ids
     self.is_random_next = is_random_next
@@ -77,6 +110,7 @@ class TrainingInstance(object):
     self.masked_lm_labels = masked_lm_labels
 
   def __str__(self):
+    """返回训练实例的字符串表示"""
     s = ""
     s += "tokens: %s\n" % (" ".join(
         [tokenization.printable_text(x) for x in self.tokens]))
@@ -90,12 +124,25 @@ class TrainingInstance(object):
     return s
 
   def __repr__(self):
+    """返回训练实例的字符串表示（与 __str__ 相同）"""
     return self.__str__()
+
 
 
 def write_instance_to_example_files(instances, tokenizer, max_seq_length,
                                     max_predictions_per_seq, output_files):
-  """Create TF example files from `TrainingInstance`s."""
+  """从 `TrainingInstance` 创建 TF 示例文件
+
+  将训练实例转换为 TFExample 格式并写入到输出文件中。
+
+  参数：
+      instances: TrainingInstance 对象列表
+      tokenizer: 分词器实例，用于将 tokens 转换为 IDs
+      max_seq_length: 最大序列长度
+      max_predictions_per_seq: 每个序列的最大掩码预测数
+      output_files: 输出文件路径列表
+  """
+
   writers = []
   for output_file in output_files:
     writers.append(tf.python_io.TFRecordWriter(output_file))
@@ -167,19 +214,58 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
 
 
 def create_int_feature(values):
+  """创建整数特征
+
+  将整数列表转换为 TensorFlow 的 Int64List 特征。
+
+  参数：
+      values: 整数列表
+
+  返回：
+      tf.train.Feature 对象
+  """
   feature = tf.train.Feature(int64_list=tf.train.Int64List(value=list(values)))
   return feature
 
 
+
 def create_float_feature(values):
+  """创建浮点数特征
+
+  将浮点数列表转换为 TensorFlow 的 FloatList 特征。
+
+  参数：
+      values: 浮点数列表
+
+  返回：
+      tf.train.Feature 对象
+  """
   feature = tf.train.Feature(float_list=tf.train.FloatList(value=list(values)))
   return feature
+
 
 
 def create_training_instances(input_files, tokenizer, max_seq_length,
                               dupe_factor, short_seq_prob, masked_lm_prob,
                               max_predictions_per_seq, rng):
-  """Create `TrainingInstance`s from raw text."""
+  """从原始文本创建 `TrainingInstance`
+
+  从输入文件中读取原始文本，处理为文档和句子，然后创建训练实例。
+
+  参数：
+      input_files: 输入文件路径列表
+      tokenizer: 分词器实例
+      max_seq_length: 最大序列长度
+      dupe_factor: 数据重复因子（使用不同的掩码）
+      short_seq_prob: 创建短序列的概率
+      masked_lm_prob: 掩码语言模型的概率
+      max_predictions_per_seq: 每个序列的最大掩码预测数
+      rng: 随机数生成器
+
+  返回：
+      TrainingInstance 对象列表
+  """
+
   all_documents = [[]]
 
   # Input file format:
@@ -223,7 +309,24 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
 def create_instances_from_document(
     all_documents, document_index, max_seq_length, short_seq_prob,
     masked_lm_prob, max_predictions_per_seq, vocab_words, rng):
-  """Creates `TrainingInstance`s for a single document."""
+  """为单个文档创建 `TrainingInstance`
+
+  从单个文档中创建训练实例，处理句子对和掩码语言模型任务。
+
+  参数：
+      all_documents: 所有文档的列表
+      document_index: 当前处理的文档索引
+      max_seq_length: 最大序列长度
+      short_seq_prob: 创建短序列的概率
+      masked_lm_prob: 掩码语言模型的概率
+      max_predictions_per_seq: 每个序列的最大掩码预测数
+      vocab_words: 词汇表单词列表
+      rng: 随机数生成器
+
+  返回：
+      TrainingInstance 对象列表
+  """
+
   document = all_documents[document_index]
 
   # Account for [CLS], [SEP], [SEP]
@@ -341,7 +444,24 @@ MaskedLmInstance = collections.namedtuple("MaskedLmInstance",
 
 def create_masked_lm_predictions(tokens, masked_lm_prob,
                                  max_predictions_per_seq, vocab_words, rng):
-  """Creates the predictions for the masked LM objective."""
+  """为掩码语言模型目标创建预测
+
+  实现 BERT 的掩码语言模型任务，随机掩码 15% 的 tokens：
+  - 80% 的概率替换为 [MASK]
+  - 10% 的概率保持原始 token
+  - 10% 的概率替换为随机 token
+
+  参数：
+      tokens: 输入 tokens 列表
+      masked_lm_prob: 掩码语言模型的概率
+      max_predictions_per_seq: 每个序列的最大掩码预测数
+      vocab_words: 词汇表单词列表
+      rng: 随机数生成器
+
+  返回：
+      (output_tokens, masked_lm_positions, masked_lm_labels) 元组
+  """
+
 
   cand_indexes = []
   for (i, token) in enumerate(tokens):
@@ -416,7 +536,17 @@ def create_masked_lm_predictions(tokens, masked_lm_prob,
 
 
 def truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng):
-  """Truncates a pair of sequences to a maximum sequence length."""
+  """将序列对截断到最大序列长度
+
+  当句子对的总长度超过最大长度时，随机从较长的句子中截断 tokens。
+
+  参数：
+      tokens_a: 第一个句子的 tokens 列表
+      tokens_b: 第二个句子的 tokens 列表
+      max_num_tokens: 最大 token 数
+      rng: 随机数生成器
+  """
+
   while True:
     total_length = len(tokens_a) + len(tokens_b)
     if total_length <= max_num_tokens:
@@ -434,11 +564,17 @@ def truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng):
 
 
 def main(_):
+  """脚本主函数
+
+  解析命令行参数，初始化分词器，读取输入文件，创建训练实例并写入输出文件。
+  """
   tf.logging.set_verbosity(tf.logging.INFO)
 
+  # 初始化分词器
   tokenizer = tokenization.FullTokenizer(
       vocab_file=FLAGS.vocab_file, do_lower_case=FLAGS.do_lower_case)
 
+  # 处理输入文件路径
   input_files = []
   for input_pattern in FLAGS.input_file.split(","):
     input_files.extend(tf.gfile.Glob(input_pattern))
@@ -447,19 +583,25 @@ def main(_):
   for input_file in input_files:
     tf.logging.info("  %s", input_file)
 
+  # 创建随机数生成器
   rng = random.Random(FLAGS.random_seed)
+  
+  # 创建训练实例
   instances = create_training_instances(
       input_files, tokenizer, FLAGS.max_seq_length, FLAGS.dupe_factor,
       FLAGS.short_seq_prob, FLAGS.masked_lm_prob, FLAGS.max_predictions_per_seq,
       rng)
 
+  # 处理输出文件路径
   output_files = FLAGS.output_file.split(",")
   tf.logging.info("*** Writing to output files ***")
   for output_file in output_files:
     tf.logging.info("  %s", output_file)
 
+  # 将训练实例写入输出文件
   write_instance_to_example_files(instances, tokenizer, FLAGS.max_seq_length,
                                   FLAGS.max_predictions_per_seq, output_files)
+
 
 
 if __name__ == "__main__":
